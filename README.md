@@ -13,6 +13,17 @@ A responsive React + TypeScript AI directory and workspace starter. It distingui
 
 Without Supabase variables, the site still runs in preview mode. Directory, search, category navigation, favourites (local session), theme toggle, external platform links, and the honest chat preview work.
 
+## Android app
+
+The Android app is built with Capacitor. Install Android Studio and its Android SDK, then run:
+
+1. `npm install`
+2. `npm run build:android`
+3. `npm run open:android`
+4. In Android Studio, build the APK from **Build → Build Bundle(s) / APK(s) → Build APK(s)**.
+
+Voice commands use Android speech recognition and request microphone permission when first used. In Chrome, the microphone button uses the browser's speech-recognition support. Say commands such as **“open image tools”**, **“show chat assistants”**, or **“search for Claude”**. The app opens external AI platforms in a browser tab.
+
 ## Supabase setup
 
 1. Create a Supabase project.

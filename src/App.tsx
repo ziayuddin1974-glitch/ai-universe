@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { Browser } from "@capacitor/browser";
+import { SpeechRecognition } from "@capacitor-community/speech-recognition";
 import { supabase, supabaseReady } from "./lib/supabase";
 import { tools, type Tool } from "./data/tools";
-import { Activity, ArrowUpRight, Bot, Bookmark, Check, ChevronDown, Command, Compass, Grid2X2, Heart, Image, LayoutDashboard, LogIn, LogOut, Menu, MessageSquare, Moon, Search, Send, Settings, Sparkles, Sun, Video, WandSparkles, X, Code2, Zap } from "lucide-react";
+import { Activity, ArrowUpRight, Bot, Bookmark, Check, ChevronDown, Command, Compass, Grid2X2, Heart, Image, LayoutDashboard, LogIn, LogOut, Menu, MessageSquare, Mic, MicOff, Moon, Search, Send, Settings, Sparkles, Sun, Video, WandSparkles, X, Code2, Zap } from "lucide-react";
 
 type Page = "Overview" | "AI Directory" | "Chat Workspace" | "Image Tools" | "Video Tools" | "Coding Tools" | "Productivity" | "Favourites" | "Settings";
 const nav = [
@@ -11,6 +14,20 @@ const nav = [
   {name:"Productivity" as Page,icon:WandSparkles}, {name:"Favourites" as Page,icon:Heart}
 ];
 const categoryFor: Record<string,string> = {"Image Tools":"Image generation","Video Tools":"Video generation","Coding Tools":"Coding","Productivity":"Productivity"};
+type BrowserSpeechRecognition = {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+};
+type SpeechWindow = Window & {
+  SpeechRecognition?: new () => BrowserSpeechRecognition;
+  webkitSpeechRecognition?: new () => BrowserSpeechRecognition;
+};
+
 function App() {
   const [page,setPage] = useState<Page>("Overview");
   const [query,setQuery] = useState("");
@@ -28,6 +45,8 @@ function App() {
   const [password,setPassword] = useState("");
   const [authBusy,setAuthBusy] = useState(false);
   const [user,setUser] = useState<string|null>(null);
+  const [listening,setListening] = useState(false);
+  const [voiceMessage,setVoiceMessage] = useState("");
 
   const filtered = useMemo(()=>tools.filter(t=>{
     const matches = `${t.name} ${t.description} ${t.category}`.toLowerCase().includes(query.toLowerCase());
@@ -38,7 +57,89 @@ function App() {
   }),[query,category,pricing,page,favs]);
 
   function toggleFav(name:string){setFavs(old=>old.includes(name)?old.filter(x=>x!==name):[...old,name]);}
-  function openTool(t:Tool){setRecent(old=>[t.name,...old.filter(x=>x!==t.name)].slice(0,5));window.open(t.url,"_blank","noopener,noreferrer");}
+  async function openTool(t:Tool){setRecent(old=>[t.name,...old.filter(x=>x!==t.name)].slice(0,5));if(Capacitor.isNativePlatform()){await Browser.open({url:t.url});return;}window.open(t.url,"_blank","noopener,noreferrer");}
+  function applyVoiceCommand(transcript:string){
+    const command=transcript.trim().toLowerCase().replace(/[.!?]+$/,"");
+    if(!command){setVoiceMessage("I didn't catch that. Tap the microphone and try again.");return;}
+    const destination:Record<string,Page>={
+      "overview":"Overview","home":"Overview","dashboard":"Overview",
+      "ai directory":"AI Directory","directory":"AI Directory","all tools":"AI Directory",
+      "chat workspace":"Chat Workspace","chat studio":"Chat Workspace",
+      "image tools":"Image Tools","image generation":"Image Tools","images":"Image Tools",
+      "video tools":"Video Tools","video generation":"Video Tools","videos":"Video Tools",
+      "coding tools":"Coding Tools","coding":"Coding Tools",
+      "productivity":"Productivity","productivity tools":"Productivity",
+      "favourites":"Favourites","favorites":"Favourites","saved tools":"Favourites",
+      "settings":"Settings"
+    };
+    const target=command.replace(/^(?:please\s+)?(?:open|show|go to|navigate to)\s+/,"");
+    if(target==="chat assistants"){
+      setPage("AI Directory");
+      setQuery("");
+      setCategory("Chat assistants");
+      setMobile(false);
+      setVoiceMessage("Showing chat assistant tools.");
+      return;
+    }
+    if(destination[target]){
+      setPage(destination[target]);
+      setQuery("");
+      setCategory("All categories");
+      setMobile(false);
+      setVoiceMessage(`Opened ${destination[target]}.`);
+      return;
+    }
+    const searchTerm=command.replace(/^(?:please\s+)?(?:search(?:\s+for)?|find|look\s+for|look\s+up)\s+/,"").replace(/^(?:open|show)\s+/,"").trim();
+    if(searchTerm){
+      const exactTool=tools.find(tool=>tool.name.toLowerCase()===searchTerm);
+      setPage("AI Directory");
+      setCategory("All categories");
+      setQuery(exactTool?.name??searchTerm);
+      setMobile(false);
+      setVoiceMessage(`Searching AI tools for "${exactTool?.name??searchTerm}".`);
+      return;
+    }
+    setVoiceMessage(`I couldn't match "${transcript}" to a command. Try "open image tools" or "search for Claude".`);
+  }
+  async function startVoiceCommand(){
+    if(listening){
+      if(Capacitor.isNativePlatform()) await SpeechRecognition.stop();
+      setListening(false);
+      return;
+    }
+    setVoiceMessage("Listening… Try “open coding tools” or “search for Claude”.");
+    setListening(true);
+    try{
+      if(Capacitor.isNativePlatform()){
+        const {available}=await SpeechRecognition.available();
+        if(!available){setVoiceMessage("Speech recognition is not available on this device.");setListening(false);return;}
+        const permission=await SpeechRecognition.checkPermissions();
+        if(permission.speechRecognition!=="granted"){
+          const requested=await SpeechRecognition.requestPermissions();
+          if(requested.speechRecognition!=="granted"){setVoiceMessage("Microphone permission is required for voice commands.");setListening(false);return;}
+        }
+        const result=await SpeechRecognition.start({language:"en-US",maxResults:1,prompt:"Try “open coding tools” or “search for Claude”",popup:true});
+        setListening(false);
+        if(result.matches?.[0]) applyVoiceCommand(result.matches[0]);
+        else setVoiceMessage("No speech was recognized. Tap the microphone to try again.");
+        return;
+      }
+      const speechWindow=window as SpeechWindow;
+      const Recognition=speechWindow.SpeechRecognition??speechWindow.webkitSpeechRecognition;
+      if(!Recognition){setVoiceMessage("Voice commands need Chrome or the Android app.");setListening(false);return;}
+      const recognition=new Recognition();
+      recognition.lang="en-US";
+      recognition.interimResults=false;
+      recognition.maxAlternatives=1;
+      recognition.onresult=event=>applyVoiceCommand(event.results[0]?.[0]?.transcript??"");
+      recognition.onerror=()=>setVoiceMessage("Speech recognition failed. Check microphone access and try again.");
+      recognition.onend=()=>setListening(false);
+      recognition.start();
+    }catch(error){
+      setListening(false);
+      setVoiceMessage(error instanceof Error?error.message:"Could not start speech recognition.");
+    }
+  }
   function sendPrompt(){
     const clean=prompt.trim(); if(!clean)return;
     setMessages(old=>[...old,{role:"you",text:clean},{role:"system",text:`${selected} is not connected to an API in this starter project. Connect an authorized provider through a secure backend Edge Function to receive real model responses. No response has been fabricated.`}]);
@@ -59,9 +160,10 @@ function App() {
       <div className="side-bottom"><div className="status"><span className="pulse"/> SYSTEM ONLINE <span className="status-right">v1.0</span></div><button className="nav-item" onClick={()=>setPage("Settings")}><Settings size={18}/>Settings</button><div className="profile-mini"><div className="avatar">U</div><div className="profile-text"><b>{user??"Guest explorer"}</b><small>{user?"Authenticated":"Local preview mode"}</small></div><button title="Sign out" onClick={signOut}><LogOut size={16}/></button></div></div>
     </aside>
     <main className="main">
-      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobile(true)}><Menu/></button><div className="crumb">UNIVERSE <span>/</span> {page.toUpperCase()}</div><div className="top-actions"><div className="secure-pill"><span/> {supabaseReady?"SUPABASE READY":"PREVIEW MODE"}</div><button className="icon-btn" title="Toggle theme" onClick={()=>setDark(!dark)}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><button className="avatar small-avatar" title="Profile">U</button></div></header>
+      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobile(true)}><Menu/></button><div className="crumb">UNIVERSE <span>/</span> {page.toUpperCase()}</div><div className="top-actions"><div className="secure-pill"><span/> {supabaseReady?"SUPABASE READY":"PREVIEW MODE"}</div><button className={`icon-btn voice-btn ${listening?"listening":""}`} title={listening?"Stop voice command":"Start voice command"} aria-label={listening?"Stop voice command":"Start voice command"} onClick={startVoiceCommand}>{listening?<MicOff size={18}/>:<Mic size={18}/>}</button><button className="icon-btn" title="Toggle theme" onClick={()=>setDark(!dark)}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><button className="avatar small-avatar" title="Profile">U</button></div></header>
+      {voiceMessage&&<div className="voice-feedback" role="status" aria-live="polite">{voiceMessage}<button onClick={()=>setVoiceMessage("")} aria-label="Dismiss voice message"><X size={14}/></button></div>}
       <section className="content">
-        {page==="Overview"&&<><div className="hero"><div className="eyebrow"><span className="sparkle-dot"/> THE FUTURE IS CONNECTED</div><h1>Every AI. One <span>Universe.</span></h1><p>Your command center for discovering, organizing, and launching the world's most powerful AI tools.</p><div className="hero-search"><Search size={19}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage("AI Directory");}} placeholder="Search 30+ AI platforms, tools, and ideas..."/><kbd>⌘ K</kbd></div><div className="hero-orb orb-one"/><div className="hero-orb orb-two"/></div>
+        {page==="Overview"&&<><div className="hero"><div className="eyebrow"><span className="sparkle-dot"/> THE FUTURE IS CONNECTED</div><h1>Every AI. One <span>Universe.</span></h1><p>Your command center for discovering, organizing, and launching the world's most powerful AI tools.</p><div className="hero-search"><Search size={19}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage("AI Directory");}} placeholder="Search 30+ AI platforms, tools, and ideas..."/><button className={`hero-voice-btn ${listening?"listening":""}`} title={listening?"Stop voice command":"Search or navigate by voice"} aria-label={listening?"Stop voice command":"Search or navigate by voice"} onClick={startVoiceCommand}>{listening?<MicOff size={17}/>:<Mic size={17}/>}</button></div><div className="hero-orb orb-one"/><div className="hero-orb orb-two"/></div>
           <div className="section-head"><div><div className="eyebrow">YOUR WORKSPACE</div><h2>Jump back in</h2></div><button className="text-link" onClick={()=>setPage("AI Directory")}>Explore directory <ArrowUpRight size={15}/></button></div>
           <div className="tool-grid featured-grid">{featured.map(t=><ToolCard key={t.name} tool={t} fav={favs.includes(t.name)} onFav={()=>toggleFav(t.name)} onOpen={()=>openTool(t)}/>)}</div>
           <div className="section-head"><div><div className="eyebrow">DISCOVER</div><h2>Explore the universe</h2></div></div>
