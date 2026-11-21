@@ -1,0 +1,83 @@
+import { useMemo, useState } from "react";
+import { supabase, supabaseReady } from "./lib/supabase";
+import { tools, type Tool } from "./data/tools";
+import { Activity, ArrowUpRight, Bot, Bookmark, Check, ChevronDown, Command, Compass, Grid2X2, Heart, Image, LayoutDashboard, LogIn, LogOut, Menu, MessageSquare, Moon, Search, Send, Settings, Sparkles, Sun, Video, WandSparkles, X, Code2, Zap } from "lucide-react";
+
+type Page = "Overview" | "AI Directory" | "Chat Workspace" | "Image Tools" | "Video Tools" | "Coding Tools" | "Productivity" | "Favourites" | "Settings";
+const nav = [
+  {name:"Overview" as Page, icon:LayoutDashboard}, {name:"Chat Workspace" as Page,icon:MessageSquare},
+  {name:"AI Directory" as Page,icon:Compass}, {name:"Image Tools" as Page,icon:Image},
+  {name:"Video Tools" as Page,icon:Video}, {name:"Coding Tools" as Page,icon:Code2},
+  {name:"Productivity" as Page,icon:WandSparkles}, {name:"Favourites" as Page,icon:Heart}
+];
+const categoryFor: Record<string,string> = {"Image Tools":"Image generation","Video Tools":"Video generation","Coding Tools":"Coding","Productivity":"Productivity"};
+function App() {
+  const [page,setPage] = useState<Page>("Overview");
+  const [query,setQuery] = useState("");
+  const [category,setCategory] = useState("All categories");
+  const [pricing,setPricing] = useState("All pricing");
+  const [favs,setFavs] = useState<string[]>([]);
+  const [recent,setRecent] = useState<string[]>(["ChatGPT","Claude","Perplexity AI"]);
+  const [dark,setDark] = useState(true);
+  const [mobile,setMobile] = useState(false);
+  const [selected,setSelected] = useState("ChatGPT");
+  const [prompt,setPrompt] = useState("");
+  const [messages,setMessages] = useState<{role:string,text:string}[]>([]);
+  const [notice,setNotice] = useState("");
+  const [email,setEmail] = useState("");
+  const [password,setPassword] = useState("");
+  const [authBusy,setAuthBusy] = useState(false);
+  const [user,setUser] = useState<string|null>(null);
+
+  const filtered = useMemo(()=>tools.filter(t=>{
+    const matches = `${t.name} ${t.description} ${t.category}`.toLowerCase().includes(query.toLowerCase());
+    const cat = category==="All categories" || t.category===category;
+    const price = pricing==="All pricing" || t.pricing===pricing;
+    const pageCat = !categoryFor[page] || t.category===categoryFor[page];
+    return matches && cat && price && pageCat && (page!=="Favourites" || favs.includes(t.name));
+  }),[query,category,pricing,page,favs]);
+
+  function toggleFav(name:string){setFavs(old=>old.includes(name)?old.filter(x=>x!==name):[...old,name]);}
+  function openTool(t:Tool){setRecent(old=>[t.name,...old.filter(x=>x!==t.name)].slice(0,5));window.open(t.url,"_blank","noopener,noreferrer");}
+  function sendPrompt(){
+    const clean=prompt.trim(); if(!clean)return;
+    setMessages(old=>[...old,{role:"you",text:clean},{role:"system",text:`${selected} is not connected to an API in this starter project. Connect an authorized provider through a secure backend Edge Function to receive real model responses. No response has been fabricated.`}]);
+    setPrompt("");
+  }
+  async function signIn(){if(!supabase){setNotice("Add your Supabase URL and anon key to .env.local, then restart the dev server.");return;}setAuthBusy(true);const {data,error}=await supabase.auth.signInWithPassword({email,password});setAuthBusy(false);setNotice(error?.message??"Signed in.");if(data.user)setUser(data.user.email??"Signed in");}
+  async function signUp(){if(!supabase){setNotice("Configure Supabase in .env.local first.");return;}setAuthBusy(true);const {data,error}=await supabase.auth.signUp({email,password});setAuthBusy(false);setNotice(error?.message??"Check your email to confirm your account.");if(data.user)setUser(data.user.email??"Account created");}
+  async function signOut(){await supabase?.auth.signOut();setUser(null);setNotice("Signed out.");}
+  const title = page==="Overview"?"Your AI command center":page;
+  const featured = ["ChatGPT","Claude","Google Gemini","Perplexity AI"].map(n=>tools.find(t=>t.name===n)!);
+  const cards = page==="Overview" ? featured : filtered;
+
+  return <div className={dark?"app dark":"app light"}>
+    <aside className={`sidebar ${mobile?"show":""}`}>
+      <div className="brand"><div className="brand-icon"><Sparkles size={21}/></div><div><b>AI UNIVERSE</b><small>YOUR AI OPERATING SYSTEM</small></div><button className="mobile-close" onClick={()=>setMobile(false)}><X/></button></div>
+      <div className="workspace-label">WORKSPACE</div>
+      <nav>{nav.map(item=><button key={item.name} className={`nav-item ${page===item.name?"active":""}`} onClick={()=>{setPage(item.name);setMobile(false);setQuery("");}}><item.icon size={18}/><span>{item.name}</span>{item.name==="Favourites"&&favs.length>0&&<em>{favs.length}</em>}</button>)}</nav>
+      <div className="side-bottom"><div className="status"><span className="pulse"/> SYSTEM ONLINE <span className="status-right">v1.0</span></div><button className="nav-item" onClick={()=>setPage("Settings")}><Settings size={18}/>Settings</button><div className="profile-mini"><div className="avatar">U</div><div className="profile-text"><b>{user??"Guest explorer"}</b><small>{user?"Authenticated":"Local preview mode"}</small></div><button title="Sign out" onClick={signOut}><LogOut size={16}/></button></div></div>
+    </aside>
+    <main className="main">
+      <header className="topbar"><button className="mobile-menu" onClick={()=>setMobile(true)}><Menu/></button><div className="crumb">UNIVERSE <span>/</span> {page.toUpperCase()}</div><div className="top-actions"><div className="secure-pill"><span/> {supabaseReady?"SUPABASE READY":"PREVIEW MODE"}</div><button className="icon-btn" title="Toggle theme" onClick={()=>setDark(!dark)}>{dark?<Sun size={18}/>:<Moon size={18}/>}</button><button className="avatar small-avatar" title="Profile">U</button></div></header>
+      <section className="content">
+        {page==="Overview"&&<><div className="hero"><div className="eyebrow"><span className="sparkle-dot"/> THE FUTURE IS CONNECTED</div><h1>Every AI. One <span>Universe.</span></h1><p>Your command center for discovering, organizing, and launching the world's most powerful AI tools.</p><div className="hero-search"><Search size={19}/><input value={query} onChange={e=>{setQuery(e.target.value);setPage("AI Directory");}} placeholder="Search 30+ AI platforms, tools, and ideas..."/><kbd>⌘ K</kbd></div><div className="hero-orb orb-one"/><div className="hero-orb orb-two"/></div>
+          <div className="section-head"><div><div className="eyebrow">YOUR WORKSPACE</div><h2>Jump back in</h2></div><button className="text-link" onClick={()=>setPage("AI Directory")}>Explore directory <ArrowUpRight size={15}/></button></div>
+          <div className="tool-grid featured-grid">{featured.map(t=><ToolCard key={t.name} tool={t} fav={favs.includes(t.name)} onFav={()=>toggleFav(t.name)} onOpen={()=>openTool(t)}/>)}</div>
+          <div className="section-head"><div><div className="eyebrow">DISCOVER</div><h2>Explore the universe</h2></div></div>
+          <div className="category-grid">{[{n:"Chat assistants",d:"Think, research & create",i:Bot,c:"violet"},{n:"Image generation",d:"Turn ideas into visuals",i:Image,c:"blue"},{n:"Video generation",d:"Bring stories to life",i:Video,c:"pink"},{n:"Coding",d:"Build faster with AI",i:Code2,c:"cyan"},{n:"Productivity",d:"Work smarter every day",i:Zap,c:"orange"}].map(x=><button className="category-card" key={x.n} onClick={()=>{setPage(x.n==="Chat assistants"?"AI Directory":x.n==="Image generation"?"Image Tools":x.n==="Video generation"?"Video Tools":x.n==="Coding"?"Coding Tools":"Productivity");setCategory("All categories");}}><div className={`category-icon ${x.c}`}><x.i size={20}/></div><b>{x.n}</b><small>{x.d}</small><ArrowUpRight size={16} className="cat-arrow"/></button>)}</div>
+          <div className="section-head"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Recently explored</h2></div></div><div className="recent-row">{recent.map(n=>{const t=tools.find(x=>x.name===n)!;return <button className="recent-chip" key={n} onClick={()=>openTool(t)}><span className="mini-mark">{t.mark}</span>{n}<ArrowUpRight size={13}/></button>})}</div>
+        </>}
+        {page==="Chat Workspace"&&<><div className="page-heading"><div className="eyebrow">MULTI-MODEL WORKSPACE</div><h1>AI <span>Chat Studio</span></h1><p>Choose an assistant and manage your conversations in one place.</p></div><div className="chat-layout"><div className="chat-models"><b>SELECT MODEL</b>{tools.filter(t=>t.category==="Chat assistants").map(t=><button className={selected===t.name?"model active":"model"} key={t.name} onClick={()=>setSelected(t.name)}><span className="mini-mark">{t.mark}</span>{t.name}{selected===t.name&&<Check size={15}/>}</button>)}</div><div className="chat-panel"><div className="chat-top"><div><b>{selected}</b><small>External provider connection required</small></div><span className="connection-tag">NOT CONNECTED</span></div><div className="chat-messages">{messages.length===0?<div className="empty-chat"><div className="empty-orb"><Sparkles size={28}/></div><h3>Start a conversation</h3><p>Your AI workspace is ready. Connect a provider API to enable live responses.</p></div>:messages.map((m,i)=><div className={`message ${m.role}`} key={i}><b>{m.role==="you"?"YOU":selected.toUpperCase()}</b><p>{m.text}</p></div>)}</div><div className="chat-compose"><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendPrompt();}}} placeholder="Message your AI assistant..."/><button onClick={sendPrompt} aria-label="Send message"><Send size={17}/></button></div><small className="chat-note">Preview mode: messages are local only; no external AI response is generated.</small></div></div></>}
+        {page!=="Overview"&&page!=="Chat Workspace"&&page!=="Settings"&&<><div className="page-heading"><div className="eyebrow">THE AI DIRECTORY</div><h1>{page==="Favourites"?"Your saved":page==="AI Directory"?"Explore the":"Explore"} <span>{page==="Favourites"?"universe":page==="AI Directory"?"universe":page.toLowerCase()}</span></h1><p>Find the right tool for every idea. Open official platforms directly from one place.</p></div><div className="filters"><div className="directory-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search AI platforms..."/></div><select value={category} onChange={e=>setCategory(e.target.value)}><option>All categories</option>{["Chat assistants","Image generation","Video generation","Coding","Productivity"].map(x=><option key={x}>{x}</option>)}</select><select value={pricing} onChange={e=>setPricing(e.target.value)}><option>All pricing</option>{["Free","Freemium","Paid","Unknown"].map(x=><option key={x}>{x}</option>)}</select></div><div className="results-label">{filtered.length} PLATFORMS FOUND <span>• Listings open official websites</span></div><div className="tool-grid">{filtered.map(t=><ToolCard key={t.name} tool={t} fav={favs.includes(t.name)} onFav={()=>toggleFav(t.name)} onOpen={()=>openTool(t)}/>)}</div>{filtered.length===0&&<div className="empty-state"><Search size={25}/><h3>No platforms found</h3><p>Try another search or adjust your filters.</p></div>}</>}
+        {page==="Settings"&&<><div className="page-heading"><div className="eyebrow">PREFERENCES & ACCOUNT</div><h1>Universe <span>settings</span></h1><p>Manage your account and personalize your workspace.</p></div><div className="settings-card"><h3>Appearance</h3><p>Choose the look of your workspace.</p><button className="setting-row" onClick={()=>setDark(!dark)}><span>{dark?"Dark mode":"Light mode"}</span><span className="setting-action">{dark?"Switch to light":"Switch to dark"} <ChevronDown size={15}/></span></button></div><div className="settings-card"><h3>Account & authentication</h3><p>Sign in with your Supabase account or create a new one.</p><input className="auth-input" type="email" placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)}/><input className="auth-input" type="password" placeholder="Password (minimum 6 characters)" value={password} onChange={e=>setPassword(e.target.value)}/><div className="auth-actions"><button className="primary-btn" disabled={authBusy} onClick={signIn}><LogIn size={16}/> Sign in</button><button className="secondary-btn" disabled={authBusy} onClick={signUp}>Create account</button></div>{notice&&<div className="notice">{notice}</div>}{user&&<div className="signed-in"><Check size={16}/> Signed in as {user}</div>}</div><div className="settings-card"><h3>Integration status</h3><p>External shortcuts work now. API-powered chat integrations require secure server-side provider setup.</p><div className="integration-line"><span>Supabase configuration</span><b className={supabaseReady?"good":"pending"}>{supabaseReady?"Configured":"Not configured"}</b></div><div className="integration-line"><span>AI provider APIs</span><b className="pending">Not connected</b></div></div></>}
+        <footer><div className="footer-brand"><Sparkles size={15}/> AI UNIVERSE</div><span>EVERY AI. ONE UNIVERSE. <i>•</i> Built for limitless curiosity.</span><span>© 2026 AI UNIVERSE</span></footer>
+      </section>
+    </main>
+    {notice&&page!=="Settings"&&<div className="toast" onClick={()=>setNotice("")}>{notice}<X size={14}/></div>}
+  </div>;
+}
+function ToolCard({tool,fav,onFav,onOpen}:{tool:Tool;fav:boolean;onFav:()=>void;onOpen:()=>void}){
+ return <article className="tool-card"><div className="card-top"><div className="tool-mark">{tool.mark}</div><button className={`fav-btn ${fav?"saved":""}`} onClick={onFav} aria-label={fav?"Remove favourite":"Add favourite"}><Heart size={17} fill={fav?"currentColor":"none"}/></button></div><div className="tool-title"><h3>{tool.name}</h3><span className="category-tag">{tool.category}</span></div><p>{tool.description}</p><div className="card-meta"><span>{tool.pricing}</span><span className="external-tag"><span/> {tool.access}</span></div><button className="open-btn" onClick={onOpen}>Open platform <ArrowUpRight size={15}/></button></article>;
+}
+export default App;

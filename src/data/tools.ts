@@ -1,0 +1,40 @@
+export type Tool = { name: string; category: string; description: string; url: string; access: "External shortcut" | "API integration" | "Coming soon"; pricing: "Free" | "Freemium" | "Paid" | "Unknown"; mark: string };
+const groups: [string,string,string,string,string][] = [
+["ChatGPT","Chat assistants","General-purpose AI assistant","https://chatgpt.com","Freemium"],
+["Google Gemini","Chat assistants","Google's multimodal AI assistant","https://gemini.google.com","Freemium"],
+["Claude","Chat assistants","AI assistant by Anthropic","https://claude.ai","Freemium"],
+["Microsoft Copilot","Chat assistants","Microsoft AI companion","https://copilot.microsoft.com","Freemium"],
+["Perplexity AI","Chat assistants","AI-powered answer and research engine","https://www.perplexity.ai","Freemium"],
+["DeepSeek","Chat assistants","AI chat and reasoning platform","https://chat.deepseek.com","Freemium"],
+["Grok","Chat assistants","AI assistant from xAI","https://grok.com","Unknown"],
+["Meta AI","Chat assistants","Meta's AI assistant","https://www.meta.ai","Free"],
+["Mistral AI","Chat assistants","AI models and assistant","https://chat.mistral.ai","Freemium"],
+["Midjourney","Image generation","AI image creation platform","https://www.midjourney.com","Paid"],
+["DALL·E","Image generation","Image generation from OpenAI","https://chatgpt.com","Freemium"],
+["Leonardo AI","Image generation","Creative image generation tools","https://leonardo.ai","Freemium"],
+["Ideogram","Image generation","Image generation with strong typography","https://ideogram.ai","Freemium"],
+["Adobe Firefly","Image generation","Adobe generative creative tools","https://firefly.adobe.com","Freemium"],
+["FLUX","Image generation","Image generation model family","https://blackforestlabs.ai","Unknown"],
+["Sora","Video generation","OpenAI video generation","https://sora.com","Unknown"],
+["Runway","Video generation","AI video creation suite","https://runwayml.com","Freemium"],
+["Kling AI","Video generation","AI video generation platform","https://klingai.com","Freemium"],
+["Pika","Video generation","AI video creation platform","https://pika.art","Freemium"],
+["Veo","Video generation","Google video generation models","https://deepmind.google/technologies/veo/","Unknown"],
+["HeyGen","Video generation","AI avatar and video platform","https://www.heygen.com","Freemium"],
+["GitHub Copilot","Coding","AI coding assistant","https://github.com/features/copilot","Paid"],
+["Cursor","Coding","AI-powered code editor","https://cursor.com","Freemium"],
+["Replit","Coding","Online IDE with AI tools","https://replit.com","Freemium"],
+["Lovable","Coding","AI app builder","https://lovable.dev","Freemium"],
+["Bolt.new","Coding","AI-powered web development","https://bolt.new","Freemium"],
+["v0","Coding","AI UI and application builder","https://v0.dev","Freemium"],
+["Notion AI","Productivity","AI features for workspace and notes","https://www.notion.com/product/ai","Paid"],
+["Gamma","Productivity","AI presentations and documents","https://gamma.app","Freemium"],
+["Canva AI","Productivity","AI-powered visual design tools","https://www.canva.com","Freemium"],
+["ElevenLabs","Productivity","AI voice generation tools","https://elevenlabs.io","Freemium"],
+["Suno","Productivity","AI music creation platform","https://suno.com","Freemium"],
+["Otter AI","Productivity","AI meeting notes and transcription","https://otter.ai","Freemium"]
+];
+export const tools: Tool[] = groups.map(([name,category,description,url,pricing]) => ({
+  name, category, description, url, pricing: pricing as Tool["pricing"],
+  access: "External shortcut", mark: name.split(/[ ·]/).map(x=>x[0]).join("").slice(0,2).toUpperCase()
+}));
