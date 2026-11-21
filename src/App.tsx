@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { Browser } from "@capacitor/browser";
 import { SpeechRecognition } from "@capacitor-community/speech-recognition";
@@ -7,6 +7,7 @@ import { tools, type Tool } from "./data/tools";
 import { Activity, ArrowUpRight, Bot, Bookmark, Check, ChevronDown, Command, Compass, Grid2X2, Heart, Image, LayoutDashboard, LogIn, LogOut, Menu, MessageSquare, Mic, MicOff, Moon, Search, Send, Settings, Sparkles, Sun, Video, WandSparkles, X, Code2, Zap } from "lucide-react";
 
 type Page = "Overview" | "AI Directory" | "Chat Workspace" | "Image Tools" | "Video Tools" | "Coding Tools" | "Productivity" | "Favourites" | "Settings";
+type ChatMessage = { role: "you" | "assistant"; text: string };
 const nav = [
   {name:"Overview" as Page, icon:LayoutDashboard}, {name:"Chat Workspace" as Page,icon:MessageSquare},
   {name:"AI Directory" as Page,icon:Compass}, {name:"Image Tools" as Page,icon:Image},
@@ -39,12 +40,15 @@ function App() {
   const [mobile,setMobile] = useState(false);
   const [selected,setSelected] = useState("ChatGPT");
   const [prompt,setPrompt] = useState("");
-  const [messages,setMessages] = useState<{role:string,text:string}[]>([]);
+  const [messages,setMessages] = useState<ChatMessage[]>([]);
+  const [chatBusy,setChatBusy] = useState(false);
+  const [conversationId,setConversationId] = useState<string|null>(null);
   const [notice,setNotice] = useState("");
   const [email,setEmail] = useState("");
   const [password,setPassword] = useState("");
   const [authBusy,setAuthBusy] = useState(false);
   const [user,setUser] = useState<string|null>(null);
+  const [userId,setUserId] = useState<string|null>(null);
   const [listening,setListening] = useState(false);
   const [voiceMessage,setVoiceMessage] = useState("");
 
@@ -56,7 +60,48 @@ function App() {
     return matches && cat && price && pageCat && (page!=="Favourites" || favs.includes(t.name));
   }),[query,category,pricing,page,favs]);
 
-  function toggleFav(name:string){setFavs(old=>old.includes(name)?old.filter(x=>x!==name):[...old,name]);}
+  useEffect(()=>{
+    if(!supabase)return;
+    let active=true;
+    const client=supabase;
+    const loadSession=async()=>{
+      const {data,error}=await client.auth.getSession();
+      if(!active)return;
+      if(error){setNotice(error.message);return;}
+      const session=data.session;
+      setUser(session?.user.email??null);
+      setUserId(session?.user.id??null);
+      if(session?.user.id) await loadFavourites(session.user.id,active);
+    };
+    const {data:{subscription}}=client.auth.onAuthStateChange((_event,session)=>{
+      if(!active)return;
+      setUser(session?.user.email??null);
+      setUserId(session?.user.id??null);
+      setConversationId(null);
+      if(session?.user.id) void loadFavourites(session.user.id,active);
+      else setFavs([]);
+    });
+    void loadSession();
+    return ()=>{active=false;subscription.unsubscribe();};
+  },[]);
+
+  async function loadFavourites(id:string,active=true){
+    if(!supabase)return;
+    const {data,error}=await supabase.from("favourites").select("tool_name").eq("user_id",id);
+    if(!active)return;
+    if(error){setNotice(`Could not load saved tools: ${error.message}`);return;}
+    setFavs(data.map(item=>item.tool_name));
+  }
+  async function toggleFav(name:string){
+    const wasSaved=favs.includes(name);
+    const previous=favs;
+    setFavs(wasSaved?favs.filter(item=>item!==name):[...favs,name]);
+    if(!supabase||!userId)return;
+    const result=wasSaved
+      ? await supabase.from("favourites").delete().eq("user_id",userId).eq("tool_name",name)
+      : await supabase.from("favourites").insert({user_id:userId,tool_name:name});
+    if(result.error){setFavs(previous);setNotice(`Could not save this favourite: ${result.error.message}`);}
+  }
   async function openTool(t:Tool){setRecent(old=>[t.name,...old.filter(x=>x!==t.name)].slice(0,5));if(Capacitor.isNativePlatform()){await Browser.open({url:t.url});return;}window.open(t.url,"_blank","noopener,noreferrer");}
   function applyVoiceCommand(transcript:string){
     const command=transcript.trim().toLowerCase().replace(/[.!?]+$/,"");
@@ -140,14 +185,54 @@ function App() {
       setVoiceMessage(error instanceof Error?error.message:"Could not start speech recognition.");
     }
   }
-  function sendPrompt(){
+  async function sendPrompt(){
     const clean=prompt.trim(); if(!clean)return;
-    setMessages(old=>[...old,{role:"you",text:clean},{role:"system",text:`${selected} is not connected to an API in this starter project. Connect an authorized provider through a secure backend Edge Function to receive real model responses. No response has been fabricated.`}]);
+    if(selected!=="ChatGPT"){setNotice(`${selected} is not connected yet. ChatGPT is currently the configured AI provider.`);return;}
+    if(!supabase||!userId){setNotice("Sign in and configure the Supabase backend to use AI chat.");return;}
+    const client=supabase;
+    const previousMessages=messages;
+    setMessages(old=>[...old,{role:"you",text:clean}]);
     setPrompt("");
+    setChatBusy(true);
+    try{
+      const {data,error}=await client.functions.invoke("ai-chat",{
+        body:{
+          provider:"openai",
+          message:clean,
+          history:previousMessages.map(item=>({
+            role:item.role==="you"?"user":"assistant",
+            content:item.text
+          }))
+        }
+      });
+      if(error)throw new Error(error.message);
+      if(!data||typeof data.text!=="string"||!data.text.trim())throw new Error("The AI service returned an empty response.");
+      const completedMessages:ChatMessage[]=[
+        ...previousMessages,
+        {role:"you",text:clean},
+        {role:"assistant",text:data.text}
+      ];
+      setMessages(completedMessages);
+      const saved=conversationId
+        ? await client.from("conversations")
+          .update({messages:completedMessages,updated_at:new Date().toISOString()})
+          .eq("id",conversationId).eq("user_id",userId)
+        : await client.from("conversations")
+          .insert({user_id:userId,provider:"openai",title:clean.slice(0,80),messages:completedMessages})
+          .select("id").single();
+      if(saved.error){setNotice(`AI replied, but the conversation could not be saved: ${saved.error.message}`);return;}
+      if(!conversationId&&"data" in saved&&saved.data)setConversationId(saved.data.id);
+    }catch(error){
+      setMessages(previousMessages);
+      setPrompt(clean);
+      setNotice(error instanceof Error?error.message:"AI chat request failed.");
+    }finally{
+      setChatBusy(false);
+    }
   }
   async function signIn(){if(!supabase){setNotice("Add your Supabase URL and anon key to .env.local, then restart the dev server.");return;}setAuthBusy(true);const {data,error}=await supabase.auth.signInWithPassword({email,password});setAuthBusy(false);setNotice(error?.message??"Signed in.");if(data.user)setUser(data.user.email??"Signed in");}
   async function signUp(){if(!supabase){setNotice("Configure Supabase in .env.local first.");return;}setAuthBusy(true);const {data,error}=await supabase.auth.signUp({email,password});setAuthBusy(false);setNotice(error?.message??"Check your email to confirm your account.");if(data.user)setUser(data.user.email??"Account created");}
-  async function signOut(){await supabase?.auth.signOut();setUser(null);setNotice("Signed out.");}
+  async function signOut(){const {error}=await supabase?.auth.signOut()??{error:null};if(error){setNotice(`Could not sign out: ${error.message}`);return;}setUser(null);setUserId(null);setFavs([]);setConversationId(null);setNotice("Signed out.");}
   const title = page==="Overview"?"Your AI command center":page;
   const featured = ["ChatGPT","Claude","Google Gemini","Perplexity AI"].map(n=>tools.find(t=>t.name===n)!);
   const cards = page==="Overview" ? featured : filtered;
@@ -170,7 +255,7 @@ function App() {
           <div className="category-grid">{[{n:"Chat assistants",d:"Think, research & create",i:Bot,c:"violet"},{n:"Image generation",d:"Turn ideas into visuals",i:Image,c:"blue"},{n:"Video generation",d:"Bring stories to life",i:Video,c:"pink"},{n:"Coding",d:"Build faster with AI",i:Code2,c:"cyan"},{n:"Productivity",d:"Work smarter every day",i:Zap,c:"orange"}].map(x=><button className="category-card" key={x.n} onClick={()=>{setPage(x.n==="Chat assistants"?"AI Directory":x.n==="Image generation"?"Image Tools":x.n==="Video generation"?"Video Tools":x.n==="Coding"?"Coding Tools":"Productivity");setCategory("All categories");}}><div className={`category-icon ${x.c}`}><x.i size={20}/></div><b>{x.n}</b><small>{x.d}</small><ArrowUpRight size={16} className="cat-arrow"/></button>)}</div>
           <div className="section-head"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Recently explored</h2></div></div><div className="recent-row">{recent.map(n=>{const t=tools.find(x=>x.name===n)!;return <button className="recent-chip" key={n} onClick={()=>openTool(t)}><span className="mini-mark">{t.mark}</span>{n}<ArrowUpRight size={13}/></button>})}</div>
         </>}
-        {page==="Chat Workspace"&&<><div className="page-heading"><div className="eyebrow">MULTI-MODEL WORKSPACE</div><h1>AI <span>Chat Studio</span></h1><p>Choose an assistant and manage your conversations in one place.</p></div><div className="chat-layout"><div className="chat-models"><b>SELECT MODEL</b>{tools.filter(t=>t.category==="Chat assistants").map(t=><button className={selected===t.name?"model active":"model"} key={t.name} onClick={()=>setSelected(t.name)}><span className="mini-mark">{t.mark}</span>{t.name}{selected===t.name&&<Check size={15}/>}</button>)}</div><div className="chat-panel"><div className="chat-top"><div><b>{selected}</b><small>External provider connection required</small></div><span className="connection-tag">NOT CONNECTED</span></div><div className="chat-messages">{messages.length===0?<div className="empty-chat"><div className="empty-orb"><Sparkles size={28}/></div><h3>Start a conversation</h3><p>Your AI workspace is ready. Connect a provider API to enable live responses.</p></div>:messages.map((m,i)=><div className={`message ${m.role}`} key={i}><b>{m.role==="you"?"YOU":selected.toUpperCase()}</b><p>{m.text}</p></div>)}</div><div className="chat-compose"><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendPrompt();}}} placeholder="Message your AI assistant..."/><button onClick={sendPrompt} aria-label="Send message"><Send size={17}/></button></div><small className="chat-note">Preview mode: messages are local only; no external AI response is generated.</small></div></div></>}
+        {page==="Chat Workspace"&&<><div className="page-heading"><div className="eyebrow">AI CHAT WORKSPACE</div><h1>AI <span>Chat Studio</span></h1><p>ChatGPT responses are powered by your securely configured backend. Sign in to save conversation history.</p></div><div className="chat-layout"><div className="chat-models"><b>SELECT MODEL</b>{tools.filter(t=>t.category==="Chat assistants").map(t=><button className={selected===t.name?"model active":"model"} key={t.name} onClick={()=>{setSelected(t.name);setConversationId(null);setMessages([]);}}><span className="mini-mark">{t.mark}</span>{t.name}{selected===t.name&&<Check size={15}/>}</button>)}</div><div className="chat-panel"><div className="chat-top"><div><b>{selected}</b><small>{selected==="ChatGPT"&&supabaseReady&&userId?"Responses and history use your secure backend":"Provider setup required"}</small></div><span className="connection-tag">{selected==="ChatGPT"&&supabaseReady&&userId?"BACKEND READY":"NOT CONFIGURED"}</span></div><div className="chat-messages">{messages.length===0&&!chatBusy?<div className="empty-chat"><div className="empty-orb"><Sparkles size={28}/></div><h3>Start a conversation</h3><p>{!supabaseReady?"Configure Supabase, deploy the backend, and sign in to enable AI chat.":!userId?"Sign in from Settings to start an AI conversation.":selected!=="ChatGPT"?`${selected} is not configured yet. Choose ChatGPT to use the connected provider.`:"Send a message to ChatGPT. Your conversations are saved to your account."}</p></div>:messages.map((m,i)=><div className={`message ${m.role}`} key={i}><b>{m.role==="you"?"YOU":selected.toUpperCase()}</b><p>{m.text}</p></div>)}{chatBusy&&<div className="message assistant"><b>{selected.toUpperCase()}</b><p>Thinking…</p></div>}</div><div className="chat-compose"><textarea value={prompt} disabled={chatBusy} onChange={e=>setPrompt(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();void sendPrompt();}}} placeholder="Message your AI assistant..."/><button onClick={()=>void sendPrompt()} disabled={chatBusy||!prompt.trim()} aria-label="Send message"><Send size={17}/></button></div><small className="chat-note">AI requests require sign-in and a configured Supabase/OpenAI backend. Chats are stored in your account.</small></div></div></>}
         {page!=="Overview"&&page!=="Chat Workspace"&&page!=="Settings"&&<><div className="page-heading"><div className="eyebrow">THE AI DIRECTORY</div><h1>{page==="Favourites"?"Your saved":page==="AI Directory"?"Explore the":"Explore"} <span>{page==="Favourites"?"universe":page==="AI Directory"?"universe":page.toLowerCase()}</span></h1><p>Find the right tool for every idea. Open official platforms directly from one place.</p></div><div className="filters"><div className="directory-search"><Search size={17}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search AI platforms..."/></div><select value={category} onChange={e=>setCategory(e.target.value)}><option>All categories</option>{["Chat assistants","Image generation","Video generation","Coding","Productivity"].map(x=><option key={x}>{x}</option>)}</select><select value={pricing} onChange={e=>setPricing(e.target.value)}><option>All pricing</option>{["Free","Freemium","Paid","Unknown"].map(x=><option key={x}>{x}</option>)}</select></div><div className="results-label">{filtered.length} PLATFORMS FOUND <span>• Listings open official websites</span></div><div className="tool-grid">{filtered.map(t=><ToolCard key={t.name} tool={t} fav={favs.includes(t.name)} onFav={()=>toggleFav(t.name)} onOpen={()=>openTool(t)}/>)}</div>{filtered.length===0&&<div className="empty-state"><Search size={25}/><h3>No platforms found</h3><p>Try another search or adjust your filters.</p></div>}</>}
         {page==="Settings"&&<><div className="page-heading"><div className="eyebrow">PREFERENCES & ACCOUNT</div><h1>Universe <span>settings</span></h1><p>Manage your account and personalize your workspace.</p></div><div className="settings-card"><h3>Appearance</h3><p>Choose the look of your workspace.</p><button className="setting-row" onClick={()=>setDark(!dark)}><span>{dark?"Dark mode":"Light mode"}</span><span className="setting-action">{dark?"Switch to light":"Switch to dark"} <ChevronDown size={15}/></span></button></div><div className="settings-card"><h3>Account & authentication</h3><p>Sign in with your Supabase account or create a new one.</p><input className="auth-input" type="email" placeholder="Email address" value={email} onChange={e=>setEmail(e.target.value)}/><input className="auth-input" type="password" placeholder="Password (minimum 6 characters)" value={password} onChange={e=>setPassword(e.target.value)}/><div className="auth-actions"><button className="primary-btn" disabled={authBusy} onClick={signIn}><LogIn size={16}/> Sign in</button><button className="secondary-btn" disabled={authBusy} onClick={signUp}>Create account</button></div>{notice&&<div className="notice">{notice}</div>}{user&&<div className="signed-in"><Check size={16}/> Signed in as {user}</div>}</div><div className="settings-card"><h3>Integration status</h3><p>External shortcuts work now. API-powered chat integrations require secure server-side provider setup.</p><div className="integration-line"><span>Supabase configuration</span><b className={supabaseReady?"good":"pending"}>{supabaseReady?"Configured":"Not configured"}</b></div><div className="integration-line"><span>AI provider APIs</span><b className="pending">Not connected</b></div></div></>}
         <footer><div className="footer-brand"><Sparkles size={15}/> AI UNIVERSE</div><span>EVERY AI. ONE UNIVERSE. <i>•</i> Built for limitless curiosity.</span><span>© 2026 AI UNIVERSE</span></footer>
